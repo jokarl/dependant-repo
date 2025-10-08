@@ -10,7 +10,7 @@ on:
 
 jobs:
   invoke-reusable:
-    uses: your-org/main-repo/.github/workflows/reusable.yml@main
+    uses: jokarl/main-repo/.github/workflows/reusable.yml@main
     with:
       caller-message: ${{ github.event.inputs['call-message'] != '' && github.event.inputs['call-message'] || vars.DEPENDANT_PUBLIC_MESSAGE }}
       caller-variable: ${{ vars.DEPENDANT_CONTEXT_NOTE }}
