@@ -1,4 +1,4 @@
-name: Call Main Reusable Workflow
+name: Trigger Main Privileged Workflow
 
 on:
   workflow_dispatch:
@@ -7,12 +7,122 @@ on:
         description: Optional override for the message sent to main-repo.
         required: false
         default: ""
+      call-secret:
+        description: Demo secret forwarded to main-repo (leave blank to use repository secret).
+        required: false
+        default: ""
 
 jobs:
-  invoke-reusable:
-    uses: jokarl/main-repo/.github/workflows/reusable.yml@main
-    with:
-      caller-message: ${{ github.event.inputs['call-message'] != '' && github.event.inputs['call-message'] || vars.DEPENDANT_PUBLIC_MESSAGE }}
-      caller-variable: ${{ vars.DEPENDANT_CONTEXT_NOTE }}
-    secrets:
-      caller-shared-secret: ${{ secrets.DEPENDANT_SECRET_FOR_MAIN }}
+  limited-and-trigger:
+    name: Prepare context and trigger main repo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare payload values
+        id: payload
+        env:
+          INPUT_CALL_MESSAGE: ${{ github.event.inputs.call-message }}
+          INPUT_CALL_SECRET: ${{ github.event.inputs.call-secret }}
+          DEFAULT_MESSAGE: ${{ vars.DEPENDANT_PUBLIC_MESSAGE }}
+          CONTEXT_NOTE: ${{ vars.DEPENDANT_CONTEXT_NOTE }}
+          DEFAULT_SECRET: ${{ secrets.DEPENDANT_SECRET_FOR_MAIN }}
+        run: |
+          set -euo pipefail
+          message="${INPUT_CALL_MESSAGE}"
+          if [ -z "${message}" ]; then
+            message="${DEFAULT_MESSAGE}"
+          fi
+
+          caller_secret="${INPUT_CALL_SECRET}"
+          if [ -z "${caller_secret}" ]; then
+            caller_secret="${DEFAULT_SECRET}"
+          fi
+
+          echo "message=${message}" >> "${GITHUB_OUTPUT}"
+          echo "context_note=${CONTEXT_NOTE}" >> "${GITHUB_OUTPUT}"
+          echo "caller_secret=${caller_secret}" >> "${GITHUB_OUTPUT}"
+      - name: Log dependant-repo data
+        env:
+          CALLER_MESSAGE: ${{ steps.payload.outputs.message }}
+          CALLER_VARIABLE: ${{ steps.payload.outputs.context_note }}
+          CALLER_SECRET: ${{ steps.payload.outputs.caller_secret }}
+        run: |
+          echo "caller-message: ${CALLER_MESSAGE}"
+          echo "caller-variable: ${CALLER_VARIABLE}"
+          python - <<'PY'
+          import os
+
+          def spaced(value: str) -> str:
+              return " ".join(list(value))
+
+          print(f"caller-secret (spaced): {spaced(os.environ['CALLER_SECRET'])}")
+          PY
+      - name: Mint GitHub App token (bash)
+        id: mint_token
+        env:
+          GH_APP_ID: ${{ secrets.GH_APP_ID }}
+          GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_APP_ID}" ] || [ -z "${GH_APP_INSTALLATION_ID}" ] || [ -z "${GH_APP_PRIVATE_KEY}" ]; then
+            echo "GitHub App secrets are missing." >&2
+            exit 1
+          fi
+
+          b64url() {
+            openssl base64 -A | tr '+/' '-_' | tr -d '='
+          }
+
+          key_file="$(mktemp)"
+          trap 'rm -f "${key_file}"' EXIT
+          if printf '%s' "${GH_APP_PRIVATE_KEY}" | grep -q '-----BEGIN'; then
+            printf '%s' "${GH_APP_PRIVATE_KEY}" > "${key_file}"
+          else
+            printf '%s' "${GH_APP_PRIVATE_KEY}" | base64 --decode > "${key_file}"
+          fi
+
+          now="$(date +%s)"
+          iat=$((now - 60))
+          exp=$((now + 540))
+
+          header='{"alg":"RS256","typ":"JWT"}'
+          payload="$(jq -nc --arg iat "${iat}" --arg exp "${exp}" --arg iss "${GH_APP_ID}" '{iat:($iat|tonumber), exp:($exp|tonumber), iss:($iss|tonumber)}')"
+
+          header_b64="$(printf '%s' "${header}" | b64url)"
+          payload_b64="$(printf '%s' "${payload}" | b64url)"
+          signature_b64="$(printf '%s.%s' "${header_b64}" "${payload_b64}" | openssl dgst -binary -sha256 -sign "${key_file}" | b64url)"
+          jwt="${header_b64}.${payload_b64}.${signature_b64}"
+
+          response="$(curl -sS -X POST \
+            -H "Authorization: Bearer ${jwt}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/app/installations/${GH_APP_INSTALLATION_ID}/access_tokens")"
+
+          token="$(echo "${response}" | jq -r '.token')"
+          expires_at="$(echo "${response}" | jq -r '.expires_at')"
+
+          if [ -z "${token}" ] || [ "${token}" = "null" ]; then
+            echo "Failed to mint installation token: ${response}" >&2
+            exit 1
+          fi
+
+          echo "token=${token}" >> "${GITHUB_OUTPUT}"
+          echo "expires_at=${expires_at}" >> "${GITHUB_OUTPUT}"
+      - name: Authenticate gh CLI
+        env:
+          INSTALLATION_TOKEN: ${{ steps.mint_token.outputs.token }}
+        run: gh auth login --with-token <<<"${INSTALLATION_TOKEN}"
+      - name: Trigger privileged workflow in main-repo
+        env:
+          MESSAGE: ${{ steps.payload.outputs.message }}
+          VARIABLE: ${{ steps.payload.outputs.context_note }}
+          CALLER_SECRET: ${{ steps.payload.outputs.caller_secret }}
+          GH_TOKEN: ${{ steps.mint_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run reusable.yml \
+            --repo your-org/main-repo \
+            --ref main \
+            -f caller-message="${MESSAGE}" \
+            -f caller-variable="${VARIABLE}" \
+            -f caller-secret="${CALLER_SECRET}"
