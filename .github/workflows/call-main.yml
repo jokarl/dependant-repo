@@ -121,7 +121,7 @@ jobs:
         run: |
           set -euo pipefail
           gh workflow run reusable.yml \
-            --repo your-org/main-repo \
+            --repo jokarl/main-repo \
             --ref main \
             -f caller-message="${MESSAGE}" \
             -f caller-variable="${VARIABLE}" \
