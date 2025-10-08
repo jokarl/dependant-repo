@@ -75,7 +75,7 @@ jobs:
 
           key_file="$(mktemp)"
           trap 'rm -f "${key_file}"' EXIT
-          if printf '%s' "${GH_APP_PRIVATE_KEY}" | grep -q '-----BEGIN'; then
+          if printf '%s' "${GH_APP_PRIVATE_KEY}" | grep -q -- '-----BEGIN'; then
             printf '%s' "${GH_APP_PRIVATE_KEY}" > "${key_file}"
           else
             printf '%s' "${GH_APP_PRIVATE_KEY}" | base64 --decode > "${key_file}"

@@ -6,7 +6,7 @@
   - Secret `DEPENDANT_SECRET_FOR_MAIN`: demonstration secret forwarded when `call-secret` is blank.
   - Secret `GH_APP_ID`: numeric GitHub App ID used to mint an installation token.
   - Secret `GH_APP_INSTALLATION_ID`: installation ID for the same App (must have access to both repos).
-  - Secret `GH_APP_PRIVATE_KEY`: GitHub App private key PEM (paste the PEM text directly; if you supply a base64 string the workflow auto-detects and decodes it).
+  - Secret `GH_APP_PRIVATE_KEY`: GitHub App private key PEM (paste raw PEM with newlines). If you provide a base64 string instead, the workflow auto-detects and decodes it.
 - The workflow:
   1. Resolves the message/secret payload and logs dependant-repo values (with spaced secret for demo visibility).
   2. Generates a GitHub App installation token using a bash script (`openssl`, `jq`, `curl`)—no third-party actions required.
